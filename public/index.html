@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Effect</title>
+  <meta name="description" content="Wayback Machine の過去ページから、サイトの文章がいつからどれだけ AI っぽくなったかを時系列で可視化します。">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>AI Effect</h1>
+      <p class="lead">サイトの文章が、いつからどれだけ AI っぽくなったかを Wayback Machine の過去ページで調べます。</p>
+    </header>
+
+    <form id="form">
+      <label class="url">
+        <span>サイトまたはブログの URL</span>
+        <input name="url" type="text" required placeholder="example.com/blog/" autocomplete="url">
+      </label>
+      <label>
+        <span>開始年</span>
+        <select name="from">
+          <option>2018</option>
+          <option selected>2019</option>
+          <option>2020</option>
+          <option>2021</option>
+        </select>
+      </label>
+      <label>
+        <span>半年あたりの記事数</span>
+        <select name="per">
+          <option>2</option>
+          <option selected>3</option>
+          <option>5</option>
+          <option>8</option>
+        </select>
+      </label>
+      <button type="submit">調べる</button>
+    </form>
+
+    <p id="status" class="status" aria-live="polite"></p>
+    <progress id="progress" hidden></progress>
+
+    <section id="result" hidden>
+      <h2>AIっぽさ指数の推移</h2>
+      <div class="chart-wrap">
+        <div id="chart"></div>
+        <div id="tooltip" class="tooltip" hidden></div>
+      </div>
+      <p class="legend">
+        <span class="key key-line"></span>半年ごとの平均
+        <span class="key key-dot"></span>各記事（クリックで Wayback の過去ページを開く）
+        <span class="key key-zero"></span>0 = ChatGPT 公開前の平均
+      </p>
+      <div id="note" class="note"></div>
+
+      <h2>期間ごとの値</h2>
+      <div class="table-wrap"><table id="period-table"></table></div>
+
+      <h2>判定した記事</h2>
+      <div class="table-wrap"><table id="article-table"></table></div>
+    </section>
+
+    <footer>
+      <p>指数は文体の特徴量を、そのサイト自身の ChatGPT 公開前（2022年11月以前）の記事と比べたものです。個々の記事が AI で書かれたかどうかを判定するものではありません。</p>
+    </footer>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-effect",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "public"
+  },
+  "build": {
+    "command": "npm run build:web"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-effect",
+      // `npx wrangler d1 create ai-effect` で発行された ID に置き換える（ローカル開発ではこのままで動く）
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "ai-effect",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:web": "esbuild web/app.ts --bundle --format=esm --target=es2022 --minify --outfile=public/app.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply ai-effect --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ai-effect --remote",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261104.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.158.0"
+  }
+}
