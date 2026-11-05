@@ -10,8 +10,12 @@ interface FeatureDef {
   direction: 1 | -1;
   // 基準期間で値がほぼ 0 のときに標準偏差の代わりに使う下限
   minScale: number;
+  // 特定の言語にしか出ない特徴量。もう一方の言語の記事では常に 0 になり指数を薄めるので使わない
+  lang?: Lang;
   compute: (t: Prepared) => number;
 }
+
+type Lang = "ja" | "en";
 
 interface Prepared {
   text: string;
@@ -52,6 +56,7 @@ export const FEATURES: FeatureDef[] = [
     label: "定型表現（日本語）/千字",
     direction: 1,
     minScale: 0.5,
+    lang: "ja",
     compute: (t) => per1000(countAll(t.text, JA_PHRASES), t),
   },
   {
@@ -59,6 +64,7 @@ export const FEATURES: FeatureDef[] = [
     label: "接続詞で始まる文の割合",
     direction: 1,
     minScale: 0.03,
+    lang: "ja",
     compute: (t) => {
       if (t.sentences.length === 0) return 0;
       const hits = t.sentences.filter((s) => JA_CONNECTIVES.some((c) => s.startsWith(c + "、") || s.startsWith(c + "，"))).length;
@@ -70,6 +76,7 @@ export const FEATURES: FeatureDef[] = [
     label: "AIに多い英単語/千字",
     direction: 1,
     minScale: 0.3,
+    lang: "en",
     compute: (t) => per1000((t.text.match(EN_PATTERN) ?? []).length, t),
   },
   {
@@ -77,6 +84,7 @@ export const FEATURES: FeatureDef[] = [
     label: "em ダッシュ（—）/千字",
     direction: 1,
     minScale: 0.3,
+    lang: "en",
     compute: (t) => per1000((t.text.match(/—/g) ?? []).length, t),
   },
   {
@@ -121,9 +129,16 @@ function prepare(text: string): Prepared {
 
 export type FeatureValues = Record<string, number>;
 
+// かなと漢字が 1 割以上あれば日本語の記事とみなす
+const isJapanese = (features: FeatureValues) => features.jaRatio >= 0.1;
+
 export function computeFeatures(text: string): FeatureValues {
   const t = prepare(text);
-  return Object.fromEntries(FEATURES.map((f) => [f.key, f.compute(t)]));
+  const ja = (text.match(/[぀-ヿ一-鿿]/g) ?? []).length;
+  return {
+    ...Object.fromEntries(FEATURES.map((f) => [f.key, f.compute(t)])),
+    jaRatio: ja / Math.max(t.chars, 1),
+  };
 }
 
 export interface Baseline {
@@ -157,7 +172,8 @@ export function buildBaseline(items: { date: number; features: FeatureValues }[]
 }
 
 export function aiIndex(features: FeatureValues, baseline: Baseline): number {
-  const zs = FEATURES.map((f) => {
+  const lang: Lang = isJapanese(features) ? "ja" : "en";
+  const zs = FEATURES.filter((f) => !f.lang || f.lang === lang).map((f) => {
     const z = (f.direction * (features[f.key] - baseline.mean[f.key])) / baseline.scale[f.key];
     // 1 つの特徴量だけが極端に振れて指数を支配しないように抑える
     return Math.max(-3, Math.min(3, z));

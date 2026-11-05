@@ -13,8 +13,7 @@
     {
       "binding": "DB",
       "database_name": "ai-effect",
-      // `npx wrangler d1 create ai-effect` で発行された ID に置き換える（ローカル開発ではこのままで動く）
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "6f400236-2ab6-4b8a-a9f2-5b524e800d51",
       "migrations_dir": "migrations"
     }
   ]

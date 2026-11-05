@@ -24,17 +24,15 @@ npm run dev
 
 ## デプロイ
 
+公開先は https://ai-effect.uk6nys.workers.dev です。
+
 ```bash
 npx wrangler login
-npx wrangler d1 create ai-effect
-```
-
-表示された `database_id` を `wrangler.jsonc` に書き込み、続けて次を実行します。
-
-```bash
 npm run db:migrate:remote
 npm run deploy
 ```
+
+別の Cloudflare アカウントに置く場合は、先に `npx wrangler d1 create ai-effect` で D1 を作り、表示された `database_id` を `wrangler.jsonc` に書き込みます。
 
 ## 指数の読み方
 

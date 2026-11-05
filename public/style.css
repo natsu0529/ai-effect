@@ -120,7 +120,8 @@ progress { width: 100%; height: 6px; accent-color: var(--accent); }
 }
 
 .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: 13px; color: var(--text-secondary); }
-.key { display: inline-block; margin-right: -10px; }
+.legend .item { display: inline-flex; align-items: center; gap: 6px; }
+.key { display: inline-block; }
 .key-line { width: 16px; height: 2px; background: var(--series-1); }
 .key-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--article); opacity: 0.7; }
 .key-zero { width: 16px; height: 1px; background: var(--text-muted); }
