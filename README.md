@@ -34,9 +34,26 @@ npm run deploy
 
 別の Cloudflare アカウントに置く場合は、先に `npx wrangler d1 create ai-effect` で D1 を作り、表示された `database_id` を `wrangler.jsonc` に書き込みます。
 
-## 指数の読み方
+## 推定AI度の読み方
 
-- 指数 0 はそのサイト自身の ChatGPT 公開前の記事の平均、1 は基準のばらつき（標準偏差）1 つ分だけ AI 寄りという意味です
-- 特徴量の定義は `web/score.ts` にあります
-- 日付は Wayback Machine に初めて保存された日で、実際の公開日より遅れることがあります
-- 個々の記事が AI で書かれたかどうかを判定するものではありません
+- 記事ごとに、文体の特徴量（`web/features.ts`）からロジスティック回帰（`web/model.json`）で AI らしさを確率として出します
+- グラフの横線は、そのサイトの ChatGPT 公開前の記事の平均です。人間の文章でもこの程度は出るので、ここからの変化を見ます
+- 日付は URL に含まれる日付、無ければ Wayback Machine に初めて保存された日です
+- 個々の記事が AI で書かれたと断定するものではありません
+
+## モデルの学習
+
+人間側は、9 サイトの 2022年1月より前に保存されたスナップショットです。AI 側は、その記事と同じタイトル・媒体で LLM に書かせた記事です（Workers AI の Qwen3 30B-A3B・gpt-oss-20b・Mistral Small 3.1 と、Claude Haiku）。サイト単位の交差検証で AUC 0.962、正解率 90.9% でした。
+
+集めた本文は他サイトの記事なので、リポジトリには入れていません（`training/data/` は `.gitignore` 済み）。作り直す手順は次のとおりです。
+
+```bash
+node training/collect-human.ts 12
+npx wrangler dev -c training/wrangler.jsonc --port 8788
+node training/generate-workersai.ts
+node training/haiku-tasks.ts 4
+node training/haiku-tasks.ts import
+node training/train.ts
+```
+
+`haiku-tasks.ts 4` は依頼を 4 つの束に分けて `training/data/haiku-tasks/` に書き出します。Claude Code の Haiku サブエージェントに束ごとに記事を書かせ、`training/data/haiku-out/` に保存してから `import` で取り込みます。

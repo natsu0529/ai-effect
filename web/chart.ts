@@ -1,6 +1,6 @@
 // 期間ごとの平均を折れ線、記事ごとの値を点で描く SVG の時系列グラフ
 
-import { CHATGPT_RELEASE } from "./score";
+export const CHATGPT_RELEASE = Date.UTC(2022, 10, 30);
 
 export interface PeriodPoint {
   label: string;
@@ -11,7 +11,7 @@ export interface PeriodPoint {
 
 export interface ArticlePoint {
   date: number;
-  index: number;
+  percent: number;
   title: string;
   waybackUrl: string;
 }
@@ -33,24 +33,25 @@ export function renderChart(
   periods: PeriodPoint[],
   articles: ArticlePoint[],
   range: [number, number],
+  // ChatGPT 公開前の記事の平均。人間の文章をどれだけ AI と誤判定しがちかの目安として横線を引く
+  reference: number | null,
 ) {
   host.replaceChildren();
   const width = Math.max(host.clientWidth, 320);
   const svg = el("svg", { viewBox: `0 0 ${width} ${HEIGHT}`, width, height: HEIGHT, role: "img" }, host);
-  svg.setAttribute("aria-label", "AIっぽさ指数の推移");
+  svg.setAttribute("aria-label", "推定AI度の推移");
 
-  const values = [...articles.map((a) => a.index), ...periods.map((p) => p.mean), 0, 1];
-  const yMax = Math.ceil(Math.max(...values) * 2) / 2;
-  const yMin = Math.floor(Math.min(...values) * 2) / 2;
   const x = (t: number) => PAD.left + ((t - range[0]) / (range[1] - range[0])) * (width - PAD.left - PAD.right);
-  const y = (v: number) => PAD.top + ((yMax - v) / (yMax - yMin)) * (HEIGHT - PAD.top - PAD.bottom);
+  const y = (v: number) => PAD.top + ((100 - v) / 100) * (HEIGHT - PAD.top - PAD.bottom);
 
   // 目盛りと横の補助線
-  const step = yMax - yMin > 4 ? 1 : 0.5;
-  for (let v = yMin; v <= yMax + 1e-9; v += step) {
-    el("line", { x1: PAD.left, x2: width - PAD.right, y1: y(v), y2: y(v), class: v === 0 ? "axis-zero" : "grid" }, svg);
+  for (let v = 0; v <= 100; v += 20) {
+    el("line", { x1: PAD.left, x2: width - PAD.right, y1: y(v), y2: y(v), class: "grid" }, svg);
     const t = el("text", { x: PAD.left - 8, y: y(v) + 4, "text-anchor": "end", class: "tick" }, svg);
-    t.textContent = v.toFixed(step < 1 ? 1 : 0);
+    t.textContent = `${v}%`;
+  }
+  if (reference !== null) {
+    el("line", { x1: PAD.left, x2: width - PAD.right, y1: y(reference), y2: y(reference), class: "axis-zero" }, svg);
   }
 
   const startYear = new Date(range[0]).getUTCFullYear();
@@ -67,7 +68,9 @@ export function renderChart(
   if (CHATGPT_RELEASE > range[0] && CHATGPT_RELEASE < range[1]) {
     const cx = x(CHATGPT_RELEASE);
     el("line", { x1: cx, x2: cx, y1: PAD.top - 8, y2: HEIGHT - PAD.bottom, class: "release" }, svg);
-    const t = el("text", { x: cx + 6, y: PAD.top - 12, class: "release-label" }, svg);
+    // 2021 年ごろに始まったサイトでは縦線が右寄りになるので、ラベルを線の左に置いてはみ出さないようにする
+    const leftSide = cx > width * 0.6;
+    const t = el("text", { x: leftSide ? cx - 6 : cx + 6, y: PAD.top - 12, "text-anchor": leftSide ? "end" : "start", class: "release-label" }, svg);
     t.textContent = "ChatGPT 公開（2022年11月）";
   }
 
@@ -84,10 +87,10 @@ export function renderChart(
   // 記事ごとの点
   for (const a of articles) {
     const g = el("g", { class: "article" }, svg);
-    el("circle", { cx: x(a.date), cy: y(a.index), r: 4, class: "article-dot" }, g);
-    const hit = el("circle", { cx: x(a.date), cy: y(a.index), r: 9, class: "hit" }, g);
+    el("circle", { cx: x(a.date), cy: y(a.percent), r: 4, class: "article-dot" }, g);
+    const hit = el("circle", { cx: x(a.date), cy: y(a.percent), r: 9, class: "hit" }, g);
     hit.addEventListener("pointerenter", () =>
-      show(`<strong>${escapeHtml(a.title || "(無題)")}</strong><br>${fmtDate(a.date)}・指数 ${a.index.toFixed(2)}`, x(a.date), y(a.index)));
+      show(`<strong>${escapeHtml(a.title || "(無題)")}</strong><br>${fmtDate(a.date)}・推定AI度 ${a.percent.toFixed(0)}%`, x(a.date), y(a.percent)));
     hit.addEventListener("pointerleave", hide);
     hit.addEventListener("click", () => window.open(a.waybackUrl, "_blank", "noopener"));
   }
@@ -101,7 +104,7 @@ export function renderChart(
     el("circle", { cx: x(p.mid), cy: y(p.mean), r: 5, class: "mean-dot" }, svg);
     const hit = el("circle", { cx: x(p.mid), cy: y(p.mean), r: 12, class: "hit" }, svg);
     hit.addEventListener("pointerenter", () =>
-      show(`<strong>${p.label}</strong><br>平均 ${p.mean.toFixed(2)}（${p.count} 記事）`, x(p.mid), y(p.mean)));
+      show(`<strong>${p.label}</strong><br>平均 ${p.mean.toFixed(0)}%（${p.count} 記事）`, x(p.mid), y(p.mean)));
     hit.addEventListener("pointerleave", hide);
   }
 }

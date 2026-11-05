@@ -1,5 +1,5 @@
-import { renderChart, fmtDate, escapeHtml, type ArticlePoint, type PeriodPoint } from "./chart";
-import { aiIndex, buildBaseline, computeFeatures, FEATURES, type Baseline, type FeatureValues } from "./score";
+import { CHATGPT_RELEASE, renderChart, fmtDate, escapeHtml, type ArticlePoint, type PeriodPoint } from "./chart";
+import { MODEL_EVAL, predict, type Prediction } from "./model";
 
 interface Article {
   ts: string;
@@ -8,7 +8,7 @@ interface Article {
   period: string;
   title?: string;
   text?: string;
-  features?: FeatureValues;
+  prediction?: Prediction;
   status: "pending" | "ok" | "short" | "duplicate" | "failed";
 }
 
@@ -17,6 +17,12 @@ const MIN_TEXT_CHARS = 300;
 // Wayback へ実際に取りに行った後だけ待つ。キャッシュから返ったときは待たない
 const POLITE_DELAY_MS = 1200;
 const CDX_LIMIT = 8000;
+// ChatGPT 公開前の数年を比べる基準にするため、ここより前の記事は見ない
+const START = Date.UTC(2018, 0, 1);
+// 初回は 1 ページに数秒かかるので、合計 40 ページ前後（2 分ほど）に収める
+const TARGET_PAGES = 40;
+const MIN_PER_PERIOD = 2;
+const MAX_PER_PERIOD = 5;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const form = $<HTMLFormElement>("form");
@@ -37,10 +43,8 @@ form.addEventListener("submit", (e) => {
   const data = new FormData(form);
   const params = {
     url: String(data.get("url") ?? "").trim(),
-    fromYear: Number(data.get("from")),
-    perPeriod: Number(data.get("per")),
   };
-  history.replaceState(null, "", `?${new URLSearchParams({ url: params.url, from: String(params.fromYear), per: String(params.perPeriod) })}`);
+  history.replaceState(null, "", `?${new URLSearchParams({ url: params.url })}`);
   void run(params, ++runId);
 });
 
@@ -50,12 +54,10 @@ window.addEventListener("resize", () => lastRender?.());
 const initial = new URLSearchParams(location.search);
 if (initial.get("url")) {
   (form.elements.namedItem("url") as HTMLInputElement).value = initial.get("url")!;
-  if (initial.get("from")) (form.elements.namedItem("from") as HTMLSelectElement).value = initial.get("from")!;
-  if (initial.get("per")) (form.elements.namedItem("per") as HTMLSelectElement).value = initial.get("per")!;
   form.requestSubmit();
 }
 
-async function run(params: { url: string; fromYear: number; perPeriod: number }, id: number) {
+async function run(params: { url: string }, id: number) {
   resultEl.hidden = true;
   setStatus("Wayback Machine から保存済みの URL 一覧を取得しています（大きなサイトだと 1 分ほどかかります）…");
   progressEl.hidden = true;
@@ -69,8 +71,7 @@ async function run(params: { url: string; fromYear: number; perPeriod: number },
   }
   if (id !== runId) return;
 
-  const range: [number, number] = [Date.UTC(params.fromYear, 0, 1), Date.now()];
-  const articles = sample(rows.slice(1), range, params.perPeriod);
+  const articles = sample(rows.slice(1), [START, Date.now()]);
   if (articles.length === 0) {
     setStatus("期間内に記事らしいページが見つかりませんでした。/blog/ のように記事が並ぶ階層の URL を試してください。");
     return;
@@ -81,6 +82,12 @@ async function run(params: { url: string; fromYear: number; perPeriod: number },
     notes.push(`保存済みの URL が多く、先頭の ${CDX_LIMIT} 件だけを対象にしました。/blog/ などに絞ると偏りが減ります。`);
   }
   notes.push("日付は URL に含まれる日付、無ければ Wayback Machine に初めて保存された日です。後者は実際の公開日より遅れることがあります。");
+  // 2018 年より後に始まったサイトは、最初の記事がある半年からグラフを描く
+  const first = new Date(articles[0].date);
+  const range: [number, number] = [Date.UTC(first.getUTCFullYear(), first.getUTCMonth() < 6 ? 0 : 6, 1), Date.now()];
+  if (range[0] >= CHATGPT_RELEASE) {
+    notes.unshift("このサイトの記事は ChatGPT 公開後のものだけです。公開前と比べられないので、推定AI度の値そのものを見てください。");
+  }
 
   progressEl.hidden = false;
   progressEl.max = articles.length;
@@ -103,7 +110,7 @@ async function run(params: { url: string; fromYear: number; perPeriod: number },
       } else if (articles.some((b) => b !== a && b.status === "ok" && b.text === res.text)) {
         a.status = "duplicate";
       } else {
-        a.features = computeFeatures(res.text);
+        a.prediction = predict(res.text);
         a.status = "ok";
       }
       if (!res.cached) await sleep(POLITE_DELAY_MS);
@@ -121,7 +128,7 @@ async function run(params: { url: string; fromYear: number; perPeriod: number },
 
 // URL 一覧を半年ごとに分け、各期間から記事らしいページを決まった数だけ選ぶ。
 // 選び方は URL のハッシュで決まるので、同じ条件で再実行すればキャッシュがそのまま効く
-function sample(rows: string[][], range: [number, number], perPeriod: number): Article[] {
+function sample(rows: string[][], range: [number, number]): Article[] {
   const byPeriod = new Map<string, Article[]>();
   const seen = new Set<string>();
   for (const [ts, url] of rows) {
@@ -138,6 +145,8 @@ function sample(rows: string[][], range: [number, number], perPeriod: number): A
     list.push({ ts, url, date, period, status: "pending" });
     byPeriod.set(period, list);
   }
+  // 1 回の調査で取りに行くページ数がおよそ一定になるよう、期間が少ないサイトほど 1 期間あたりを増やす
+  const perPeriod = Math.max(MIN_PER_PERIOD, Math.min(MAX_PER_PERIOD, Math.floor(TARGET_PAGES / Math.max(byPeriod.size, 1))));
   const picked: Article[] = [];
   for (const list of byPeriod.values()) {
     list.sort((a, b) => hash(a.url) - hash(b.url));
@@ -179,49 +188,48 @@ function periodBounds(period: string): { label: string; mid: number } {
 }
 
 function draw(articles: Article[], range: [number, number], notes: string[]) {
-  const scored = articles.filter((a): a is Article & { features: FeatureValues } => a.status === "ok" && !!a.features);
-  const baseline = buildBaseline(scored);
-  const lines = [...notes];
-  if (!baseline) {
-    noteEl.innerHTML = notes.map((n) => `<p>${escapeHtml(n)}</p>`).join("") + "<p>判定できた記事が 3 件を超えると指数を表示します。</p>";
-    renderTables(articles, null, []);
-    return;
-  }
-  if (baseline.kind === "earliest") {
-    lines.unshift(`ChatGPT 公開前の記事が少ないため、古い順に ${baseline.count} 記事を基準にしました。指数は「最初の時期からの変化」を表します。`);
-  } else {
-    lines.unshift(`ChatGPT 公開前の ${baseline.count} 記事を基準（指数 0）にしました。指数 1 は基準のばらつき 1 つ分だけ AI 寄りという意味です。`);
+  const scored = articles.filter((a): a is Article & { prediction: Prediction } => a.status === "ok" && !!a.prediction);
+  const percent = (a: { prediction: Prediction }) => a.prediction.probability * 100;
+  const before = scored.filter((a) => a.date < CHATGPT_RELEASE);
+  const reference = before.length ? before.reduce((s, a) => s + percent(a), 0) / before.length : null;
+
+  const lines = [
+    `学習データとは別のサイトで試した精度: AUC ${MODEL_EVAL.auc}、正解率 ${(MODEL_EVAL.accuracy * 100).toFixed(0)}%（人間 ${MODEL_EVAL.human} 記事・AI ${MODEL_EVAL.ai} 記事、${MODEL_EVAL.sites} サイト）。`,
+    ...notes,
+  ];
+  if (reference !== null) {
+    lines.unshift(`ChatGPT 公開前の ${before.length} 記事の平均は ${reference.toFixed(0)}% です。人間の文章でもこの程度は出るので、ここからの変化を見てください。`);
   }
   noteEl.innerHTML = lines.map((n) => `<p>${escapeHtml(n)}</p>`).join("");
 
   const points: ArticlePoint[] = scored.map((a) => ({
     date: a.date,
-    index: aiIndex(a.features, baseline),
+    percent: percent(a),
     title: a.title ?? "",
     waybackUrl: waybackUrl(a),
   }));
   const periods = new Map<string, number[]>();
-  scored.forEach((a, i) => periods.set(a.period, [...(periods.get(a.period) ?? []), points[i].index]));
+  scored.forEach((a, i) => periods.set(a.period, [...(periods.get(a.period) ?? []), points[i].percent]));
   const periodPoints: PeriodPoint[] = [...periods.entries()]
     .map(([p, vals]) => ({ ...periodBounds(p), mean: vals.reduce((x, y) => x + y, 0) / vals.length, count: vals.length }))
     .sort((a, b) => a.mid - b.mid);
 
-  renderChart(chartEl, tooltipEl, periodPoints, points, range);
-  renderTables(articles, baseline, periodPoints);
+  renderChart(chartEl, tooltipEl, periodPoints, points, range, reference);
+  renderTables(articles, periodPoints);
 }
 
-function renderTables(articles: Article[], baseline: Baseline | null, periods: PeriodPoint[]) {
-  periodTable.innerHTML = `<thead><tr><th>期間</th><th>平均指数</th><th>記事数</th></tr></thead><tbody>${
-    periods.map((p) => `<tr><td>${p.label}</td><td class="num">${p.mean.toFixed(2)}</td><td class="num">${p.count}</td></tr>`).join("")
+function renderTables(articles: Article[], periods: PeriodPoint[]) {
+  periodTable.innerHTML = `<thead><tr><th>期間</th><th>平均の推定AI度</th><th>記事数</th></tr></thead><tbody>${
+    periods.map((p) => `<tr><td>${p.label}</td><td class="num">${p.mean.toFixed(0)}%</td><td class="num">${p.count}</td></tr>`).join("")
   }</tbody>`;
 
-  const head = FEATURES.map((f) => `<th title="${escapeHtml(f.label)}">${escapeHtml(f.label)}</th>`).join("");
-  articleTable.innerHTML = `<thead><tr><th>保存日</th><th>ページ</th><th>指数</th>${head}</tr></thead><tbody>${
+  articleTable.innerHTML = `<thead><tr><th>日付</th><th>ページ</th><th>推定AI度</th><th>AI寄りに効いた特徴</th></tr></thead><tbody>${
     articles.map((a) => {
-      const idx = baseline && a.features ? aiIndex(a.features, baseline).toFixed(2) : statusLabel(a.status);
-      const cells = FEATURES.map((f) => `<td class="num">${a.features ? a.features[f.key].toFixed(2) : ""}</td>`).join("");
+      const p = a.prediction;
+      const value = p ? `${(p.probability * 100).toFixed(0)}%` : statusLabel(a.status);
+      const reasons = p ? escapeHtml(p.reasons.join("、")) : "";
       const name = escapeHtml(a.title || a.url);
-      return `<tr><td>${fmtDate(a.date)}</td><td class="page"><a href="${escapeHtml(waybackUrl(a))}" target="_blank" rel="noopener">${name}</a></td><td class="num">${idx}</td>${cells}</tr>`;
+      return `<tr><td>${fmtDate(a.date)}</td><td class="page"><a href="${escapeHtml(waybackUrl(a))}" target="_blank" rel="noopener">${name}</a></td><td class="num">${value}</td><td>${reasons}</td></tr>`;
     }).join("")
   }</tbody>`;
 }

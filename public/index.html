@@ -20,24 +20,6 @@
         <span>サイトまたはブログの URL</span>
         <input name="url" type="text" required placeholder="example.com/blog/" autocomplete="url">
       </label>
-      <label>
-        <span>開始年</span>
-        <select name="from">
-          <option>2018</option>
-          <option selected>2019</option>
-          <option>2020</option>
-          <option>2021</option>
-        </select>
-      </label>
-      <label>
-        <span>半年あたりの記事数</span>
-        <select name="per">
-          <option>2</option>
-          <option selected>3</option>
-          <option>5</option>
-          <option>8</option>
-        </select>
-      </label>
       <button type="submit">調べる</button>
     </form>
 
@@ -45,7 +27,7 @@
     <progress id="progress" hidden></progress>
 
     <section id="result" hidden>
-      <h2>AIっぽさ指数の推移</h2>
+      <h2>推定AI度の推移</h2>
       <div class="chart-wrap">
         <div id="chart"></div>
         <div id="tooltip" class="tooltip" hidden></div>
@@ -53,7 +35,7 @@
       <p class="legend">
         <span class="item"><span class="key key-line"></span>半年ごとの平均</span>
         <span class="item"><span class="key key-dot"></span>各記事（クリックで Wayback の過去ページを開く）</span>
-        <span class="item"><span class="key key-zero"></span>0 = ChatGPT 公開前の平均</span>
+        <span class="item"><span class="key key-zero"></span>ChatGPT 公開前の平均</span>
       </p>
       <div id="note" class="note"></div>
 
@@ -65,7 +47,7 @@
     </section>
 
     <footer>
-      <p>指数は文体の特徴量を、そのサイト自身の ChatGPT 公開前（2022年11月以前）の記事と比べたものです。個々の記事が AI で書かれたかどうかを判定するものではありません。</p>
+      <p>推定AI度は、ChatGPT 公開前の人間の記事と、同じ題で LLM に書かせた記事から学習した文体のモデルが出す確率です。個々の記事が AI で書かれたと断定するものではありません。</p>
     </footer>
   </main>
   <script type="module" src="/app.js"></script>
