@@ -23,6 +23,8 @@ const START = Date.UTC(2018, 0, 1);
 const TARGET_PAGES = 40;
 const MIN_PER_PERIOD = 2;
 const MAX_PER_PERIOD = 5;
+// これより記事が少なければ、サイトの記事ではなく入力したページ自体の過去の版を調べる
+const MIN_SITE_ARTICLES = 3;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const form = $<HTMLFormElement>("form");
@@ -71,22 +73,39 @@ async function run(params: { url: string }, id: number) {
   }
   if (id !== runId) return;
 
-  const articles = sample(rows.slice(1), [START, Date.now()]);
-  if (articles.length === 0) {
-    setStatus("期間内に記事らしいページが見つかりませんでした。/blog/ のように記事が並ぶ階層の URL を試してください。");
-    return;
-  }
-
   const notes: string[] = [];
-  if (rows.length - 1 >= CDX_LIMIT) {
-    notes.push(`保存済みの URL が多く、先頭の ${CDX_LIMIT} 件だけを対象にしました。/blog/ などに絞ると偏りが減ります。`);
+  let articles = sample(rows.slice(1), [START, Date.now()]);
+  // 記事の一覧が取れないとき（会社のページや 1 つの記事の URL など）は、入力したページそのものの過去の版を並べる
+  const pageMode = articles.length < MIN_SITE_ARTICLES;
+  if (pageMode) {
+    setStatus("記事の一覧が見つからなかったので、このページ自体の過去の版を探しています…");
+    let history: string[][];
+    try {
+      history = await getJson<string[][]>(`/api/cdx?mode=page&url=${encodeURIComponent(params.url)}`, id);
+    } catch (e) {
+      if (id === runId) setStatus(`保存履歴を取得できませんでした: ${(e as Error).message}`);
+      return;
+    }
+    if (id !== runId) return;
+    articles = samplePageHistory(history.slice(1), [START, Date.now()]);
+    if (articles.length === 0) {
+      setStatus(rows.length <= 1 && history.length <= 1
+        ? "この URL は Wayback Machine に保存されていません。個人のブログや新しいサイトは保存されていないことがあります。"
+        : "2018 年以降に保存されたページが見つかりませんでした。");
+      return;
+    }
+    notes.push("記事の一覧が見つからなかったので、入力したページそのものを半年ごとに取得して判定しました。");
+  } else {
+    if (rows.length - 1 >= CDX_LIMIT) {
+      notes.push(`保存済みの URL が多く、先頭の ${CDX_LIMIT} 件だけを対象にしました。/blog/ などに絞ると偏りが減ります。`);
+    }
+    notes.push("日付は URL に含まれる日付、無ければ Wayback Machine に初めて保存された日です。後者は実際の公開日より遅れることがあります。");
   }
-  notes.push("日付は URL に含まれる日付、無ければ Wayback Machine に初めて保存された日です。後者は実際の公開日より遅れることがあります。");
   // 2018 年より後に始まったサイトは、最初の記事がある半年からグラフを描く
   const first = new Date(articles[0].date);
   const range: [number, number] = [Date.UTC(first.getUTCFullYear(), first.getUTCMonth() < 6 ? 0 : 6, 1), Date.now()];
   if (range[0] >= CHATGPT_RELEASE) {
-    notes.unshift("このサイトの記事は ChatGPT 公開後のものだけです。公開前と比べられないので、推定AI度の値そのものを見てください。");
+    notes.unshift("ChatGPT 公開後に保存されたページしかありません。公開前と比べられないので、推定AI度の値そのものを見てください。");
   }
 
   progressEl.hidden = false;
@@ -107,7 +126,8 @@ async function run(params: { url: string }, id: number) {
       a.text = res.text;
       if (res.text.replace(/\s/g, "").length < MIN_TEXT_CHARS) {
         a.status = "short";
-      } else if (articles.some((b) => b !== a && b.status === "ok" && b.text === res.text)) {
+      } else if (!pageMode && articles.some((b) => b !== a && b.status === "ok" && b.text === res.text)) {
+        // 同じページの過去の版なら、中身が変わっていないこと自体が結果なので重複として外さない
         a.status = "duplicate";
       } else {
         a.prediction = predict(res.text);
@@ -122,7 +142,10 @@ async function run(params: { url: string }, id: number) {
   }
   if (id !== runId) return;
   const ok = articles.filter((a) => a.status === "ok").length;
-  setStatus(`完了: ${articles.length} ページ中 ${ok} ページを判定しました。`);
+  const short = articles.filter((a) => a.status === "short").length;
+  setStatus(ok === 0 && short > 0
+    ? "保存されたページに文章がほとんどありませんでした。Studio や note など、文章を JavaScript で表示するサイトは、保存された HTML に本文が入っていないため調べられません。"
+    : `完了: ${articles.length} ページ中 ${ok} ページを判定しました。`);
   progressEl.hidden = true;
 }
 
@@ -151,6 +174,24 @@ function sample(rows: string[][], range: [number, number]): Article[] {
   for (const list of byPeriod.values()) {
     list.sort((a, b) => hash(a.url) - hash(b.url));
     picked.push(...list.slice(0, perPeriod));
+  }
+  return picked.sort((a, b) => a.date - b.date);
+}
+
+// 1 つのページの保存履歴（1 か月に 1 件）から、半年ごとに期間の始めと半ばの 2 件を選ぶ
+function samplePageHistory(rows: string[][], range: [number, number]): Article[] {
+  const byPeriod = new Map<string, Article[]>();
+  for (const [ts, url] of rows) {
+    if (!ts || !url) continue;
+    const date = Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8));
+    if (date < range[0] || date > range[1]) continue;
+    const period = periodOf(date);
+    byPeriod.set(period, [...(byPeriod.get(period) ?? []), { ts, url, date, period, status: "pending" }]);
+  }
+  const picked: Article[] = [];
+  for (const list of byPeriod.values()) {
+    picked.push(list[0]);
+    if (list.length >= 3) picked.push(list[Math.floor(list.length / 2)]);
   }
   return picked.sort((a, b) => a.date - b.date);
 }

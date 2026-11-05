@@ -9,6 +9,8 @@ const WAYBACK = "https://web.archive.org";
 const USER_AGENT = "ai-effect/0.1 (personal research tool; slow polite crawling)";
 // 接頭辞ごとの URL 一覧。新しい記事が増えるので 1 週間で取り直す
 const CDX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// 保存が 1 件も無いという結果は、Wayback 側の取りこぼしもありうるので短めに持つ
+const EMPTY_CDX_TTL_MS = 60 * 60 * 1000;
 // D1 の 1 行は 2MB まで。timestamp と URL だけなら 8000 件で 1MB 前後に収まる
 const CDX_LIMIT = 8000;
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
@@ -26,36 +28,41 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
+// mode=site（既定）: その接頭辞の下にある URL ごとの初回保存日の一覧
+// mode=page: 入力した URL そのものの保存履歴（1 か月に 1 件）。記事の一覧が取れない単独のページ用
 async function handleCdx(url: URL, env: Env): Promise<Response> {
   const prefix = normalizePrefix(url.searchParams.get("url") ?? "");
   if (!prefix) return json({ error: "url が不正です" }, 400);
+  const page = url.searchParams.get("mode") === "page";
+  const key = page ? `page:${prefix}` : prefix;
 
   const hit = await env.DB.prepare("SELECT body, fetched_at FROM cdx_cache WHERE prefix = ?")
-    .bind(prefix)
+    .bind(key)
     .first<{ body: string; fetched_at: number }>();
-  if (hit && Date.now() - hit.fetched_at < CDX_TTL_MS) {
+  if (hit && Date.now() - hit.fetched_at < (hit.body === "[]" ? EMPTY_CDX_TTL_MS : CDX_TTL_MS)) {
     return rawJson(hit.body, { "x-cache": "hit" });
   }
 
-  // collapse=urlkey で URL ごとに最初の 1 件だけ残す。最初に保存された時期を公開時期の目安にする
-  const q = new URLSearchParams({
-    url: prefix,
-    matchType: "prefix",
-    output: "json",
-    fl: "timestamp,original",
-    collapse: "urlkey",
-    limit: String(CDX_LIMIT),
-  });
+  const q = new URLSearchParams({ url: prefix, output: "json", fl: "timestamp,original" });
+  if (page) {
+    q.set("collapse", "timestamp:6");
+  } else {
+    // collapse=urlkey で URL ごとに最初の 1 件だけ残す。最初に保存された時期を公開時期の目安にする
+    q.set("matchType", "prefix");
+    q.set("collapse", "urlkey");
+    q.set("limit", String(CDX_LIMIT));
+  }
   q.append("filter", "statuscode:200");
   q.append("filter", "mimetype:text/html");
   const res = await fetch(`${WAYBACK}/cdx/search/cdx?${q}`, { headers: { "user-agent": USER_AGENT } });
   if (!res.ok) return upstreamError(res);
 
   const body = (await res.text()).trim() || "[]";
-  if (!body.startsWith("[")) return json({ error: "CDX API が想定外の応答を返しました" }, 502);
+  // 混雑時は 200 のまま「一時停止中」の HTML が返ることがある
+  if (!body.startsWith("[")) return json({ error: "Wayback Machine が一時的に応答していません", retryable: true }, 503);
   await env.DB.prepare(
     "INSERT OR REPLACE INTO cdx_cache (prefix, body, fetched_at) VALUES (?, ?, ?)",
-  ).bind(prefix, body, Date.now()).run();
+  ).bind(key, body, Date.now()).run();
   return rawJson(body, { "x-cache": "miss" });
 }
 
