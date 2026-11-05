@@ -248,7 +248,8 @@ async function getJson<T>(path: string, id: number): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(path);
     if (res.ok) return res.json() as Promise<T>;
-    const body = await res.json().catch(() => ({})) as { error?: string; retryable?: boolean };
+    // JSON でない 5xx は Worker が CPU 制限などで打ち切られたときの応答。1 回だけ取り直す
+    const body = await res.json().catch(() => ({ retryable: res.status >= 500 && attempt === 0 })) as { error?: string; retryable?: boolean };
     if (!body.retryable || attempt >= waits.length || id !== runId) throw new Error(body.error ?? `HTTP ${res.status}`);
     setStatus(`Wayback Machine が混雑しています。${waits[attempt] / 1000} 秒待って再試行します…`);
     await sleep(waits[attempt]);

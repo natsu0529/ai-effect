@@ -3,6 +3,10 @@
   "name": "ai-effect",
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-01",
+  // エラーの種類（CPU 超過など）をダッシュボードの Workers Logs で見られるようにする
+  "observability": {
+    "enabled": true
+  },
   "assets": {
     "directory": "public"
   },

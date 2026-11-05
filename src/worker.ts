@@ -1,4 +1,4 @@
-import { extractText, withCharset } from "./extract";
+import { extractText, prepareHtml } from "./extract";
 
 interface Env {
   DB: D1Database;
@@ -79,7 +79,7 @@ async function handleText(url: URL, env: Env): Promise<Response> {
   const type = res.headers.get("content-type") ?? "";
   const size = Number(res.headers.get("content-length") ?? 0);
   if (res.ok && type.includes("html") && size <= MAX_HTML_BYTES) {
-    extracted = await extractText(await withCharset(res));
+    extracted = await extractText(await prepareHtml(res));
   }
   // 取れなかったページも空で保存し、同じページを Wayback へ何度も取りに行かないようにする
   await env.DB.prepare(
